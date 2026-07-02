@@ -32,6 +32,8 @@
           <option value="true">GMあり：ホストが進行</option>
           <option value="false">GMなし：アプリが自動進行</option>
         </select>
+        <label>部屋パスワード（任意）</label>
+        <input id="roomPasswordCreate" maxlength="40" type="password" placeholder="身内だけで遊ぶ場合に設定">
         <button id="createRoom" class="primary">部屋を作成</button>
       </div>
 
@@ -41,6 +43,8 @@
         <input id="joinCode" maxlength="6" placeholder="例：ABCD">
         <label>名前</label>
         <input id="joinName" maxlength="20" placeholder="例：田中">
+        <label>部屋パスワード</label>
+        <input id="roomPasswordJoin" maxlength="40" type="password" placeholder="設定されている場合のみ">
         <button id="joinRoom" class="primary">参加する</button>
       </div>
     </section>

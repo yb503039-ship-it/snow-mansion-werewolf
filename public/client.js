@@ -13,6 +13,7 @@ const saved = {
   playerId: localStorage.getItem('ww_playerId') || '',
   name: localStorage.getItem('ww_name') || '',
   roomCode: qs.get('room') || localStorage.getItem('ww_roomCode') || '',
+  password: localStorage.getItem('ww_roomPassword') || '',
 };
 
 const ROLE_LABELS = {
@@ -94,16 +95,23 @@ function renderHome() {
   const joinName = app.querySelector('#joinName');
   joinCode.value = saved.roomCode || '';
   joinName.value = saved.name || '';
+  const joinPassword = app.querySelector('#roomPasswordJoin');
+  if (joinPassword) joinPassword.value = saved.password || '';
+  const hostName = app.querySelector('#hostName');
+  if (hostName && saved.name) hostName.value = saved.name;
 
   app.querySelector('#createRoom').addEventListener('click', async () => {
     const hostName = app.querySelector('#hostName').value.trim() || 'GM';
     const title = app.querySelector('#roomTitle').value.trim() || '吹雪の屋敷';
     const gmMode = app.querySelector('#gmMode').value === 'true';
-    const res = await emitAck('createRoom', { hostName, title, gmMode });
+    const password = app.querySelector('#roomPasswordCreate')?.value.trim() || '';
+    const res = await emitAck('createRoom', { hostName, title, gmMode, password });
     if (res.ok) {
       localStorage.setItem('ww_playerId', res.playerId);
       localStorage.setItem('ww_name', hostName);
       localStorage.setItem('ww_roomCode', res.code);
+      if (password) localStorage.setItem('ww_roomPassword', password);
+      else localStorage.removeItem('ww_roomPassword');
       history.replaceState(null, '', `?room=${res.code}`);
     }
   });
@@ -111,11 +119,13 @@ function renderHome() {
   app.querySelector('#joinRoom').addEventListener('click', async () => {
     const code = joinCode.value.trim().toUpperCase();
     const name = joinName.value.trim();
-    const res = await emitAck('joinRoom', { code, name, playerId: saved.playerId });
+    const password = app.querySelector('#roomPasswordJoin')?.value.trim() || '';
+    const res = await emitAck('joinRoom', { code, name, password, playerId: saved.playerId });
     if (res.ok) {
       localStorage.setItem('ww_playerId', res.playerId);
       localStorage.setItem('ww_name', name);
       localStorage.setItem('ww_roomCode', res.code);
+      if (password) localStorage.setItem('ww_roomPassword', password);
       history.replaceState(null, '', `?room=${res.code}`);
     }
   });
@@ -157,14 +167,25 @@ function renderLobby() {
   return `
     <section class="grid two">
       <div class="card">
-        <h2>参加用URL</h2>
-        <div class="room-code">${escapeHtml(state.room.code)}</div>
-        <p>このURLを共有すると、プレイヤーが自分のスマホで参加できます。</p>
-        <div class="share-row">
-          <input id="shareUrl" readonly value="${escapeHtml(url)}">
-          <button id="copyUrl" class="small">コピー</button>
+        <h2>参加用URL・QR</h2>
+        <div class="share-layout">
+          <div>
+            <div class="room-code">${escapeHtml(state.room.code)}</div>
+            <div class="badges">
+              <span class="badge ${state.room.passwordRequired ? 'important' : ''}">${state.room.passwordRequired ? 'パスワードあり' : 'パスワードなし'}</span>
+              <span class="badge">人数：${state.players.length} / 20</span>
+            </div>
+            <p>URLを共有するか、スマホでQRコードを読み取って参加できます。</p>
+            <div class="share-row">
+              <input id="shareUrl" readonly value="${escapeHtml(url)}">
+              <button id="copyUrl" class="small">コピー</button>
+            </div>
+            <p class="note">※QRコードには部屋コードだけが入ります。パスワードありの場合は参加時に入力してください。</p>
+          </div>
+          <div class="qr-wrap">
+            <img class="qr" alt="参加用QRコード" src="/qr/${encodeURIComponent(state.room.code)}.svg?v=${state.players.length}-${state.room.passwordRequired ? 1 : 0}">
+          </div>
         </div>
-        <p>人数：${state.players.length} / 20　※4人以上で開始できます。</p>
       </div>
       <div class="card">
         <h2>参加者</h2>
@@ -226,6 +247,21 @@ function renderHostLobby() {
         ${checkbox('consecutiveGuard', '連続ガードあり', state.room.settings.consecutiveGuard)}
       </div>
       <button id="saveSettings" class="good">設定を保存</button>
+    </section>
+
+    <section class="card">
+      <h2>セキュリティ</h2>
+      <p>現在：${state.room.passwordRequired ? 'パスワードあり' : 'パスワードなし'}</p>
+      <div class="settings-grid">
+        <div>
+          <label>部屋パスワードの設定・変更</label>
+          <input id="roomPasswordUpdate" type="password" maxlength="40" placeholder="変更する場合のみ入力">
+        </div>
+        <div>
+          <label class="badge clear-password"><input type="checkbox" id="clearPassword" style="width:auto"> パスワードを解除する</label>
+        </div>
+      </div>
+      <p class="note">公開URLでも、部屋コード＋パスワードで身内だけに絞れます。</p>
     </section>
 
     <section class="card">
@@ -483,6 +519,19 @@ function bindCommon() {
   }
 }
 
+function collectRoomUpdatePayload() {
+  const payload = {
+    gmMode: app.querySelector('#settingGmMode')?.value === 'true',
+    settings: collectSettings(),
+    roleCounts: collectRoleCounts(),
+  };
+  const password = app.querySelector('#roomPasswordUpdate')?.value.trim() || '';
+  const clearPassword = Boolean(app.querySelector('#clearPassword')?.checked);
+  if (clearPassword) payload.clearPassword = true;
+  else if (password) payload.password = password;
+  return payload;
+}
+
 function collectSettings() {
   return {
     daySeconds: Number(app.querySelector('#daySeconds')?.value || state.room.settings.daySeconds),
@@ -518,21 +567,13 @@ function bindLobby() {
     }
   });
   app.querySelector('#saveSettings')?.addEventListener('click', async () => {
-    await emitAck('updateRoom', {
-      gmMode: app.querySelector('#settingGmMode').value === 'true',
-      settings: collectSettings(),
-      roleCounts: collectRoleCounts(),
-    });
+    await emitAck('updateRoom', collectRoomUpdatePayload());
   });
   app.querySelector('#autoCounts')?.addEventListener('click', async () => {
     await emitAck('autoRoleCounts');
   });
   app.querySelector('#startGame')?.addEventListener('click', async () => {
-    const savedSettings = await emitAck('updateRoom', {
-      gmMode: app.querySelector('#settingGmMode').value === 'true',
-      settings: collectSettings(),
-      roleCounts: collectRoleCounts(),
-    });
+    const savedSettings = await emitAck('updateRoom', collectRoomUpdatePayload());
     if (savedSettings.ok) await emitAck('startGame');
   });
   app.querySelectorAll('.kick').forEach((button) => {
@@ -585,7 +626,7 @@ socket.on('connect', () => {
   connection.className = 'connection ok';
   const code = qs.get('room');
   if (code && saved.name && saved.playerId) {
-    emitAck('joinRoom', { code, name: saved.name, playerId: saved.playerId });
+    emitAck('joinRoom', { code, name: saved.name, password: saved.password, playerId: saved.playerId });
   } else {
     renderHome();
   }

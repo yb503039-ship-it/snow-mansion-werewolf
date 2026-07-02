@@ -2,7 +2,9 @@
 
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const express = require('express');
+const QRCode = require('qrcode');
 const { Server } = require('socket.io');
 
 const PORT = process.env.PORT || 3000;
@@ -10,6 +12,30 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
+});
+
+app.set('trust proxy', 1);
+
+function getPublicBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  return `${proto}://${req.get('host')}`;
+}
+
+app.get('/qr/:code.svg', async (req, res) => {
+  try {
+    const code = String(req.params.code || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{4,6}$/.test(code)) return res.status(400).send('Invalid room code');
+    const room = rooms.get(code);
+    if (!room) return res.status(404).send('Room not found');
+    const url = `${getPublicBaseUrl(req)}/?room=${encodeURIComponent(code)}`;
+    const svg = await QRCode.toString(url, { type: 'svg', margin: 1, width: 260 });
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(svg);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('QR generation failed');
+  }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -101,6 +127,21 @@ function makeRoomCode() {
 
 function makeId(prefix = 'id') {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
+}
+
+function normalizePassword(value) {
+  return String(value || '').trim().slice(0, 60);
+}
+
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password, 'utf8').digest('hex');
+}
+
+function passwordMatches(room, password) {
+  if (!room.passwordHash) return true;
+  const normalized = normalizePassword(password);
+  if (!normalized) return false;
+  return hashPassword(normalized) === room.passwordHash;
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -255,6 +296,7 @@ function buildStateForSocket(room, socket) {
       voteCandidates: room.voteCandidates,
       winner: room.winner,
       winText: room.winText,
+      passwordRequired: Boolean(room.passwordHash),
     },
     me: me ? {
       id: me.id,
@@ -605,11 +647,13 @@ io.on('connection', (socket) => {
     const playerId = makeId('p');
     const hostName = String(payload.hostName || 'GM').trim().slice(0, 20) || 'GM';
     const gmMode = payload.gmMode !== false;
+    const initialPassword = normalizePassword(payload.password);
     const room = {
       code,
       title: String(payload.title || '吹雪の屋敷').trim().slice(0, 40) || '吹雪の屋敷',
       hostSocketId: socket.id,
       hostPlayerId: playerId,
+      passwordHash: initialPassword ? hashPassword(initialPassword) : null,
       sockets: new Set([socket.id]),
       players: [{ id: playerId, name: hostName, socketId: socket.id, alive: true, connected: true, role: null, ready: false, privateLogs: [] }],
       status: 'lobby',
@@ -646,13 +690,16 @@ io.on('connection', (socket) => {
     const code = String(payload.code || '').trim().toUpperCase();
     const room = rooms.get(code);
     if (!room) return ack?.({ ok: false, error: '部屋が見つかりません。部屋コードを確認してください。' });
-    if (room.status !== 'lobby') return ack?.({ ok: false, error: 'この部屋はすでにゲーム開始済みです。' });
-    if (room.players.length >= 20) return ack?.({ ok: false, error: 'この部屋は満員です。' });
     const name = String(payload.name || '').trim().slice(0, 20);
     if (!name) return ack?.({ ok: false, error: '名前を入力してください。' });
 
     let player = null;
     if (payload.playerId) player = findPlayer(room, payload.playerId);
+
+    if (room.status !== 'lobby' && !player) return ack?.({ ok: false, error: 'この部屋はすでにゲーム開始済みです。' });
+    if (!player && room.players.length >= 20) return ack?.({ ok: false, error: 'この部屋は満員です。' });
+    if (!player && !passwordMatches(room, payload.password)) return ack?.({ ok: false, error: '部屋パスワードが違います。' });
+
     if (!player) {
       player = { id: makeId('p'), name, socketId: socket.id, alive: true, connected: true, role: null, ready: false, privateLogs: [] };
       room.players.push(player);
@@ -661,13 +708,14 @@ io.on('connection', (socket) => {
       player.name = name;
       player.socketId = socket.id;
       player.connected = true;
+      if (player.id === room.hostPlayerId) room.hostSocketId = socket.id;
       addLog(room, `${name}さんが再接続しました。`, true, 'system');
     }
     room.sockets.add(socket.id);
     socket.data.roomCode = code;
     socket.data.playerId = player.id;
     socket.join(code);
-    ack?.({ ok: true, code, playerId: player.id });
+    ack?.({ ok: true, code, playerId: player.id, passwordRequired: Boolean(room.passwordHash) });
     emitRoom(room);
   });
 
@@ -678,6 +726,16 @@ io.on('connection', (socket) => {
     room.gmMode = payload.gmMode !== false;
     room.settings = normalizeSettings(payload.settings || room.settings);
     if (payload.title) room.title = String(payload.title).trim().slice(0, 40) || room.title;
+    if (payload.clearPassword) {
+      room.passwordHash = null;
+      addLog(room, '部屋パスワードを解除しました。', true, 'system');
+    } else if (Object.prototype.hasOwnProperty.call(payload, 'password')) {
+      const nextPassword = normalizePassword(payload.password);
+      if (nextPassword) {
+        room.passwordHash = hashPassword(nextPassword);
+        addLog(room, '部屋パスワードを設定しました。', true, 'system');
+      }
+    }
     if (payload.roleCounts) {
       const checked = validateRoleCounts(room.players.length, payload.roleCounts);
       if (!checked.ok) return ack?.({ ok: false, error: checked.error });

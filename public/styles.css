@@ -211,3 +211,36 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .toast.error { border-color: rgba(255, 138, 138, .45); color: #ffdada; }
 .hidden { display: none !important; }
+
+.share-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+.qr-wrap {
+  background: rgba(255,255,255,.94);
+  border-radius: 18px;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,.25);
+  box-shadow: 0 10px 30px rgba(0,0,0,.22);
+}
+.qr {
+  display: block;
+  width: 160px;
+  height: 160px;
+}
+.note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.clear-password {
+  margin-top: 35px;
+  justify-content: flex-start;
+}
+@media (max-width: 700px) {
+  .share-layout { grid-template-columns: 1fr; }
+  .qr-wrap { width: fit-content; }
+  .qr { width: 190px; height: 190px; }
+}
