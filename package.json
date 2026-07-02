@@ -1,6 +1,6 @@
 {
   "name": "snow-mansion-werewolf",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A web-based werewolf game for friends: room codes, personal role screens, GM mode and auto-GM mode.",
   "main": "server.js",
   "scripts": {

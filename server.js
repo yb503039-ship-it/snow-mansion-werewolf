@@ -113,6 +113,8 @@ const DEFAULT_SETTINGS = {
   skipWhenAllVoted: true,
   firstNightAttack: true,
   consecutiveGuard: true,
+  rolePreference: false,
+  missingRole: false,
 };
 
 function makeRoomCode() {
@@ -200,6 +202,8 @@ function normalizeSettings(settings = {}) {
     skipWhenAllVoted: Boolean(settings.skipWhenAllVoted ?? DEFAULT_SETTINGS.skipWhenAllVoted),
     firstNightAttack: Boolean(settings.firstNightAttack ?? DEFAULT_SETTINGS.firstNightAttack),
     consecutiveGuard: Boolean(settings.consecutiveGuard ?? DEFAULT_SETTINGS.consecutiveGuard),
+    rolePreference: Boolean(settings.rolePreference ?? DEFAULT_SETTINGS.rolePreference),
+    missingRole: Boolean(settings.missingRole ?? DEFAULT_SETTINGS.missingRole),
   };
 }
 
@@ -210,6 +214,7 @@ function publicPlayer(player, includeRole = false) {
     alive: player.alive,
     connected: player.connected,
     ready: player.ready,
+    hasRolePreference: Boolean(player.desiredRole),
     role: includeRole ? player.role : undefined,
     roleName: includeRole && player.role ? ROLES[player.role].name : undefined,
   };
@@ -297,6 +302,7 @@ function buildStateForSocket(room, socket) {
       winner: room.winner,
       winText: room.winText,
       passwordRequired: Boolean(room.passwordHash),
+      missingRoleName: host && room.missingRole ? ROLES[room.missingRole]?.name : null,
     },
     me: me ? {
       id: me.id,
@@ -308,6 +314,7 @@ function buildStateForSocket(room, socket) {
       description: role?.description,
       privateLogs: me.privateLogs.slice(-30),
       connected: me.connected,
+      desiredRole: me.desiredRole || '',
     } : null,
     isHost: host,
     players,
@@ -382,21 +389,56 @@ function enterPhase(room, phase, options = {}) {
   emitRoom(room);
 }
 
-function assignRoles(room) {
-  const players = shuffle(room.players);
-  const counts = room.roleCounts || autoRoleCounts(players.length);
+function buildRoleDeckFromCounts(counts, playerCount) {
   let deck = [];
   for (const [role, count] of Object.entries(counts)) {
     for (let i = 0; i < count; i += 1) deck.push(role);
   }
-  if (deck.length !== players.length) {
-    const diff = players.length - deck.length;
+  if (deck.length !== playerCount) {
+    const diff = playerCount - deck.length;
     for (let i = 0; i < diff; i += 1) deck.push('villager');
-    if (deck.length > players.length) deck = deck.slice(0, players.length);
+    if (deck.length > playerCount) deck = deck.slice(0, playerCount);
   }
-  deck = shuffle(deck);
-  players.forEach((player, index) => {
-    player.role = deck[index] || 'villager';
+  return deck;
+}
+
+function applyMissingRole(room, counts) {
+  room.missingRole = null;
+  if (!room.settings.missingRole) return counts;
+  const nextCounts = { ...counts };
+  // 初級版では「人狼」と「市民」は欠け対象外。能力役職・狂人から1つを市民に置き換える。
+  const candidates = Object.keys(nextCounts).filter((role) => role !== 'werewolf' && role !== 'villager' && nextCounts[role] > 0);
+  if (candidates.length === 0) return nextCounts;
+  const missing = pickRandom(candidates);
+  nextCounts[missing] -= 1;
+  nextCounts.villager += 1;
+  room.missingRole = missing;
+  addLog(room, '役職欠けが発生しました。どの役職が欠けたかは公開されません。', true, 'system');
+  return nextCounts;
+}
+
+function assignRoles(room) {
+  const players = shuffle(room.players);
+  const baseCounts = room.roleCounts || autoRoleCounts(players.length);
+  const counts = applyMissingRole(room, baseCounts);
+  const assignments = new Map();
+  const remainingCounts = { ...counts };
+
+  if (room.settings.rolePreference) {
+    for (const role of Object.keys(ROLES)) {
+      const slots = remainingCounts[role] || 0;
+      if (slots <= 0) continue;
+      const hopefuls = shuffle(players.filter((player) => !assignments.has(player.id) && player.desiredRole === role));
+      for (const player of hopefuls.slice(0, slots)) {
+        assignments.set(player.id, role);
+        remainingCounts[role] -= 1;
+      }
+    }
+  }
+
+  let deck = shuffle(buildRoleDeckFromCounts(remainingCounts, players.length - assignments.size));
+  players.forEach((player) => {
+    player.role = assignments.get(player.id) || deck.pop() || 'villager';
     player.alive = true;
     player.privateLogs = [];
     player.ready = false;
@@ -655,7 +697,7 @@ io.on('connection', (socket) => {
       hostPlayerId: playerId,
       passwordHash: initialPassword ? hashPassword(initialPassword) : null,
       sockets: new Set([socket.id]),
-      players: [{ id: playerId, name: hostName, socketId: socket.id, alive: true, connected: true, role: null, ready: false, privateLogs: [] }],
+      players: [{ id: playerId, name: hostName, socketId: socket.id, alive: true, connected: true, role: null, ready: false, privateLogs: [], desiredRole: null }],
       status: 'lobby',
       phase: 'lobby',
       day: 1,
@@ -670,6 +712,7 @@ io.on('connection', (socket) => {
       runoffDone: false,
       skipUsed: 0,
       executedLast: null,
+      missingRole: null,
       winner: null,
       winText: null,
       phaseStartedAt: Date.now(),
@@ -701,7 +744,7 @@ io.on('connection', (socket) => {
     if (!player && !passwordMatches(room, payload.password)) return ack?.({ ok: false, error: '部屋パスワードが違います。' });
 
     if (!player) {
-      player = { id: makeId('p'), name, socketId: socket.id, alive: true, connected: true, role: null, ready: false, privateLogs: [] };
+      player = { id: makeId('p'), name, socketId: socket.id, alive: true, connected: true, role: null, ready: false, privateLogs: [], desiredRole: null };
       room.players.push(player);
       addLog(room, `${name}さんが参加しました。`, true, 'system');
     } else {
@@ -716,6 +759,20 @@ io.on('connection', (socket) => {
     socket.data.playerId = player.id;
     socket.join(code);
     ack?.({ ok: true, code, playerId: player.id, passwordRequired: Boolean(room.passwordHash) });
+    emitRoom(room);
+  });
+
+
+  socket.on('setRolePreference', (payload = {}, ack) => {
+    const room = getRoomBySocket(socket);
+    const player = room && findPlayer(room, socket.data.playerId);
+    if (!room || !player) return ack?.({ ok: false, error: '部屋に参加していません。' });
+    if (room.status !== 'lobby') return ack?.({ ok: false, error: '開始後は役職希望を変更できません。' });
+    if (!room.settings.rolePreference) return ack?.({ ok: false, error: 'この部屋では役職希望が無効です。' });
+    const role = String(payload.role || '');
+    if (role && !ROLES[role]) return ack?.({ ok: false, error: '存在しない役職です。' });
+    player.desiredRole = role || null;
+    ack?.({ ok: true });
     emitRoom(room);
   });
 
@@ -885,6 +942,7 @@ io.on('connection', (socket) => {
     room.votes = {};
     room.voteCandidates = null;
     room.executedLast = null;
+    room.missingRole = null;
     for (const p of room.players) {
       p.role = null;
       p.alive = true;

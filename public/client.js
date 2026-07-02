@@ -192,7 +192,38 @@ function renderLobby() {
         ${renderPlayers(false)}
       </div>
     </section>
+    ${renderRolePreferenceCard()}
     ${state.isHost ? renderHostLobby() : `<section class="card"><h2>待機中</h2><p>ホストがゲームを開始するまで待ってください。</p></section>`}
+  `;
+}
+
+
+function roleOptions(selected = '') {
+  return ['<option value="">希望なし</option>']
+    .concat(Object.entries(ROLE_LABELS).map(([role, label]) => `<option value="${role}" ${selected === role ? 'selected' : ''}>${label}</option>`))
+    .join('');
+}
+
+function renderRolePreferenceCard() {
+  if (!state.me) return '';
+  if (!state.room.settings.rolePreference) {
+    return `
+      <section class="card">
+        <h2>役職希望</h2>
+        <p>この部屋では役職希望は使用しません。</p>
+      </section>
+    `;
+  }
+  return `
+    <section class="card">
+      <h2>役職希望</h2>
+      <p>希望する役職を選べます。同じ役職に複数人の希望がある場合はランダムで決まります。希望が通らなかった場合は、空いている役職からランダムで配役されます。</p>
+      <div class="action-row">
+        <select id="desiredRole">${roleOptions(state.me.desiredRole || '')}</select>
+        <button id="savePreference" class="good">希望を保存</button>
+      </div>
+      <p class="note">現在の希望：${state.me.desiredRole ? escapeHtml(ROLE_LABELS[state.me.desiredRole] || state.me.desiredRole) : '希望なし'}</p>
+    </section>
   `;
 }
 
@@ -237,6 +268,20 @@ function renderHostLobby() {
             <option value="2" ${state.room.settings.allowSkip === 2 ? 'selected' : ''}>2回</option>
           </select>
         </div>
+        <div>
+          <label>役職希望</label>
+          <select id="rolePreference">
+            <option value="false" ${!state.room.settings.rolePreference ? 'selected' : ''}>なし</option>
+            <option value="true" ${state.room.settings.rolePreference ? 'selected' : ''}>あり</option>
+          </select>
+        </div>
+        <div>
+          <label>役職欠け</label>
+          <select id="missingRole">
+            <option value="false" ${!state.room.settings.missingRole ? 'selected' : ''}>なし</option>
+            <option value="true" ${state.room.settings.missingRole ? 'selected' : ''}>あり</option>
+          </select>
+        </div>
       </div>
       <div class="settings-grid">
         ${checkbox('runoff', '決選投票あり', state.room.settings.runoff)}
@@ -266,7 +311,7 @@ function renderHostLobby() {
 
     <section class="card">
       <h2>初級役職の配役</h2>
-      <p>おすすめ配役を自動で入れています。足りない人数は市民に自動調整されます。</p>
+      <p>おすすめ配役を自動で入れています。足りない人数は市民に自動調整されます。役職欠けありの場合、人狼・市民以外の役職から1つが市民に置き換わります。</p>
       <div class="role-counts">
         ${Object.keys(ROLE_LABELS).map((role) => `
           <div>
@@ -450,6 +495,7 @@ function renderPlayers(includeRole) {
             <span>${p.alive ? '生存' : '死亡'}</span>
             <span>${p.connected ? '接続中' : '切断'}</span>
             ${includeRole ? `<span>${escapeHtml(p.roleName || '')}</span>` : ''}
+            ${!includeRole && state.room.phase === 'lobby' && state.room.settings.rolePreference ? `<span>${p.hasRolePreference ? '希望済み' : '希望なし'}</span>` : ''}
           </div>
         </div>
         ${state.isHost && state.room.phase === 'lobby' && p.id !== state.me?.id ? `<button class="small danger kick" data-id="${p.id}">退出</button>` : ''}
@@ -500,6 +546,7 @@ function renderHostGamePanel() {
       </div>
       <div class="card">
         <h2>GM用：役職一覧</h2>
+        ${state.room.missingRoleName ? `<p class="note">役職欠け：${escapeHtml(state.room.missingRoleName)}</p>` : ''}
         ${renderPlayers(true)}
         <button id="resetRoom2" class="danger" style="margin-top:12px">ゲームをリセット</button>
       </div>
@@ -539,6 +586,8 @@ function collectSettings() {
     voteSeconds: Number(app.querySelector('#voteSeconds')?.value || state.room.settings.voteSeconds),
     showVotes: app.querySelector('#showVotes')?.value || state.room.settings.showVotes,
     allowSkip: Number(app.querySelector('#allowSkip')?.value || state.room.settings.allowSkip),
+    rolePreference: (app.querySelector('#rolePreference')?.value || String(state.room.settings.rolePreference)) === 'true',
+    missingRole: (app.querySelector('#missingRole')?.value || String(state.room.settings.missingRole)) === 'true',
     runoff: Boolean(app.querySelector('#runoff')?.checked),
     randomTie: Boolean(app.querySelector('#randomTie')?.checked),
     allowSelfVote: Boolean(app.querySelector('#allowSelfVote')?.checked),
@@ -565,6 +614,11 @@ function bindLobby() {
     } catch {
       toast('コピーできませんでした。URLを手動でコピーしてください。', 'error');
     }
+  });
+  app.querySelector('#savePreference')?.addEventListener('click', async () => {
+    const role = app.querySelector('#desiredRole')?.value || '';
+    const res = await emitAck('setRolePreference', { role });
+    if (res.ok) toast('役職希望を保存しました。');
   });
   app.querySelector('#saveSettings')?.addEventListener('click', async () => {
     await emitAck('updateRoom', collectRoomUpdatePayload());
