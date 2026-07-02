@@ -1,0 +1,20 @@
+{
+  "name": "snow-mansion-werewolf",
+  "version": "0.1.0",
+  "description": "A web-based werewolf game for friends: room codes, personal role screens, GM mode and auto-GM mode.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>吹雪の屋敷 人狼</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="snow"></div>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">Snow Mansion Werewolf</p>
+      <h1>吹雪の屋敷 人狼</h1>
+      <p class="lead">URLを共有して参加できる、身内向けオンライン人狼アプリ。</p>
+    </div>
+    <div class="connection" id="connection">接続中...</div>
+  </header>
+
+  <main id="app" class="app"></main>
+
+  <template id="home-template">
+    <section class="grid two">
+      <div class="card">
+        <h2>部屋を作る</h2>
+        <label>ホスト名</label>
+        <input id="hostName" maxlength="20" placeholder="例：辻本">
+        <label>部屋名</label>
+        <input id="roomTitle" maxlength="40" value="吹雪の屋敷">
+        <label>モード</label>
+        <select id="gmMode">
+          <option value="true">GMあり：ホストが進行</option>
+          <option value="false">GMなし：アプリが自動進行</option>
+        </select>
+        <button id="createRoom" class="primary">部屋を作成</button>
+      </div>
+
+      <div class="card">
+        <h2>部屋に参加</h2>
+        <label>部屋コード</label>
+        <input id="joinCode" maxlength="6" placeholder="例：ABCD">
+        <label>名前</label>
+        <input id="joinName" maxlength="20" placeholder="例：田中">
+        <button id="joinRoom" class="primary">参加する</button>
+      </div>
+    </section>
+  </template>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/client.js"></script>
+</body>
+</html>
